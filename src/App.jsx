@@ -23,8 +23,17 @@ export default function App() {
   const [createEventoForm, setCreateEventoForm] = useState({ data_evento: '', prioridade_ate: '' });
   const [forceStatusForm, setForceStatusForm] = useState({ user_id: '', status: 'confirmado' });
   const [authForm, setAuthForm] = useState({ email: '', name: '', password: '' });
+  const [authView, setAuthView] = useState('login');
+  const [loginMode, setLoginMode] = useState('magic');
+  const [magicSent, setMagicSent] = useState(false);
+  const [magicSentAt, setMagicSentAt] = useState(0);
+  const [magicTick, setMagicTick] = useState(0);
+  const [resetMode, setResetMode] = useState(false);
+  const [resetForm, setResetForm] = useState({ password: '', confirm: '' });
 
   const userId = session?.user?.id;
+  const emailValue = authForm.email.trim();
+  const emailValid = /\S+@\S+\.\S+/.test(emailValue);
 
   const selectedPelada = useMemo(
     () => peladas.find((pelada) => pelada.id === selectedPeladaId),
@@ -46,6 +55,9 @@ export default function App() {
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((_event, newSession) => {
+      if (_event === 'PASSWORD_RECOVERY') {
+        setResetMode(true);
+      }
       setSession(newSession);
       if (!newSession) {
         setProfile(null);
@@ -56,6 +68,20 @@ export default function App() {
 
     return () => subscription.unsubscribe();
   }, []);
+
+  useEffect(() => {
+    if (window.location.hash.includes('type=recovery')) {
+      setResetMode(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!magicSentAt) return;
+    const id = setInterval(() => {
+      setMagicTick((value) => value + 1);
+    }, 1000);
+    return () => clearInterval(id);
+  }, [magicSentAt]);
 
   useEffect(() => {
     if (!userId) return;
@@ -157,8 +183,10 @@ export default function App() {
   const signInWithMagicLink = async () => {
     setNotice('');
     setLoading(true);
+    setMagicSent(false);
+    setMagicSentAt(0);
     const { error } = await supabase.auth.signInWithOtp({
-      email: authForm.email,
+      email: emailValue,
       options: {
         data: { name: authForm.name },
       },
@@ -167,6 +195,8 @@ export default function App() {
       setNotice(error.message);
     } else {
       setNotice('Link de acesso enviado para seu email.');
+      setMagicSent(true);
+      setMagicSentAt(Date.now());
     }
     setLoading(false);
   };
@@ -174,8 +204,10 @@ export default function App() {
   const signUpWithPassword = async () => {
     setNotice('');
     setLoading(true);
+    setMagicSent(false);
+    setMagicSentAt(0);
     const { error } = await supabase.auth.signUp({
-      email: authForm.email,
+      email: emailValue,
       password: authForm.password,
       options: { data: { name: authForm.name } },
     });
@@ -190,12 +222,48 @@ export default function App() {
   const signInWithPassword = async () => {
     setNotice('');
     setLoading(true);
+    setMagicSent(false);
+    setMagicSentAt(0);
     const { error } = await supabase.auth.signInWithPassword({
-      email: authForm.email,
+      email: emailValue,
       password: authForm.password,
     });
     if (error) {
       setNotice(error.message);
+    }
+    setLoading(false);
+  };
+
+  const resetPassword = async () => {
+    setNotice('');
+    setLoading(true);
+    setMagicSentAt(0);
+    const { error } = await supabase.auth.resetPasswordForEmail(emailValue, {
+      redirectTo: window.location.origin,
+    });
+    if (error) {
+      setNotice(error.message);
+    } else {
+      setNotice('Enviamos um email para redefinir sua senha.');
+    }
+    setLoading(false);
+  };
+
+  const updatePassword = async () => {
+    setNotice('');
+    if (!resetForm.password || resetForm.password !== resetForm.confirm) {
+      setNotice('As senhas nao conferem.');
+      return;
+    }
+    setLoading(true);
+    const { error } = await supabase.auth.updateUser({ password: resetForm.password });
+    if (error) {
+      setNotice(error.message);
+    } else {
+      setNotice('Senha atualizada com sucesso.');
+      setResetMode(false);
+      setResetForm({ password: '', confirm: '' });
+      window.history.replaceState(null, '', window.location.pathname);
     }
     setLoading(false);
   };
@@ -349,66 +417,258 @@ export default function App() {
     setLoading(false);
   };
 
-  if (!session) {
+  if (!session && !resetMode) {
+    const primaryLoginLabel =
+      loginMode === 'magic'
+        ? loading
+          ? 'Enviando...'
+        : 'Enviar link'
+        : loading
+        ? 'Entrando...'
+        : 'Entrar';
+    const now = Date.now() + magicTick;
+    const resendRemaining = magicSentAt
+      ? Math.max(0, 30 - Math.floor((now - magicSentAt) / 1000))
+      : 0;
+
     return (
       <div className="app">
         <div className="header">
           <h1>Gestor de Pelada</h1>
         </div>
         <div className="card">
-          <h2>Entrar</h2>
-          <p>Use seu email para receber um link magico ou entre com Google.</p>
-          <div className="grid">
-            <label>
-              Nome
-              <input
-                value={authForm.name}
-                onChange={(event) => setAuthForm((prev) => ({ ...prev, name: event.target.value }))}
-                placeholder="Seu nome"
-              />
-            </label>
-            <label>
-              Email
-              <input
-                type="email"
-                value={authForm.email}
-                onChange={(event) => setAuthForm((prev) => ({ ...prev, email: event.target.value }))}
-                placeholder="voce@email.com"
-              />
-            </label>
-            <label>
-              Senha
-              <input
-                type="password"
-                value={authForm.password}
-                onChange={(event) => setAuthForm((prev) => ({ ...prev, password: event.target.value }))}
-                placeholder="Minimo 6 caracteres"
-              />
-            </label>
-          </div>
-          <div className="actions" style={{ marginTop: 12 }}>
-            <button onClick={signInWithMagicLink} disabled={loading || !authForm.email}>
-              Enviar link
-            </button>
+          <div className="tabs">
             <button
-              className="secondary"
-              onClick={signInWithPassword}
-              disabled={loading || !authForm.email || !authForm.password}
+              className={`tab ${authView === 'login' ? 'active' : ''}`}
+              onClick={() => {
+                setAuthView('login');
+                setNotice('');
+                setMagicSent(false);
+                setMagicSentAt(0);
+              }}
             >
-              Entrar com senha
+              Entrar
             </button>
             <button
-              className="secondary"
-              onClick={signUpWithPassword}
-              disabled={loading || !authForm.email || !authForm.password}
+              className={`tab ${authView === 'signup' ? 'active' : ''}`}
+              onClick={() => {
+                setAuthView('signup');
+                setNotice('');
+                setMagicSent(false);
+                setMagicSentAt(0);
+              }}
             >
               Criar conta
             </button>
-            <button className="secondary" onClick={signInWithGoogle} disabled={loading}>
-              Entrar com Google
+          </div>
+
+          {authView === 'login' ? (
+            <>
+              <h2>Entrar</h2>
+              <p>Entre com Google ou receba um link de acesso no seu email.</p>
+              <div className="stack">
+                <button className="primary" onClick={signInWithGoogle} disabled={loading}>
+                  Continuar com Google
+                </button>
+                <div className="divider">
+                  <span>ou</span>
+                </div>
+                <label>
+                  Email
+                  <input
+                    type="email"
+                    value={authForm.email}
+                    onChange={(event) => setAuthForm((prev) => ({ ...prev, email: event.target.value }))}
+                    placeholder="voce@email.com"
+                  />
+                </label>
+                <div className="radio-group">
+                  <label className="radio">
+                    <input
+                      type="radio"
+                      name="loginMode"
+                      checked={loginMode === 'magic'}
+                      onChange={() => setLoginMode('magic')}
+                    />
+                    Receber link por email (recomendado)
+                  </label>
+                  <label className="radio">
+                    <input
+                      type="radio"
+                      name="loginMode"
+                      checked={loginMode === 'password'}
+                      onChange={() => setLoginMode('password')}
+                    />
+                    Usar senha
+                  </label>
+                </div>
+                {loginMode === 'password' && (
+                  <label>
+                    Senha
+                    <input
+                      type="password"
+                      value={authForm.password}
+                      onChange={(event) => setAuthForm((prev) => ({ ...prev, password: event.target.value }))}
+                      placeholder="Minimo 6 caracteres"
+                    />
+                  </label>
+                )}
+                <small>
+                  {loginMode === 'magic'
+                    ? 'Enviaremos um link que expira em alguns minutos.'
+                    : 'Use a senha da sua conta.'}
+                </small>
+                <button
+                  onClick={loginMode === 'magic' ? signInWithMagicLink : signInWithPassword}
+                  disabled={
+                    loading ||
+                    !emailValid ||
+                    (loginMode === 'password' && !authForm.password)
+                  }
+                >
+                  {primaryLoginLabel}
+                </button>
+                {magicSent && (
+                  <div className="notice">
+                    <small>Cheque seu email. Voce pode reenviar em {resendRemaining}s.</small>
+                    <button
+                      className="secondary"
+                      onClick={signInWithMagicLink}
+                      disabled={loading || !emailValid || resendRemaining > 0}
+                    >
+                      Reenviar link
+                    </button>
+                  </div>
+                )}
+              </div>
+              <div className="auth-links">
+                <button
+                  className="link"
+                  onClick={() => {
+                    setAuthView('signup');
+                    setNotice('');
+                    setMagicSent(false);
+                    setMagicSentAt(0);
+                  }}
+                >
+                  Nao tem conta? Criar conta
+                </button>
+                <button className="link" onClick={resetPassword} disabled={!emailValid || loading}>
+                  Esqueci minha senha
+                </button>
+              </div>
+            </>
+          ) : (
+            <>
+              <h2>Criar conta</h2>
+              <p>Crie sua conta com email e senha.</p>
+              <div className="stack">
+                <label>
+                  Nome
+                  <input
+                    value={authForm.name}
+                    onChange={(event) => setAuthForm((prev) => ({ ...prev, name: event.target.value }))}
+                    placeholder="Seu nome"
+                  />
+                </label>
+                <label>
+                  Email
+                  <input
+                    type="email"
+                    value={authForm.email}
+                    onChange={(event) => setAuthForm((prev) => ({ ...prev, email: event.target.value }))}
+                    placeholder="voce@email.com"
+                  />
+                </label>
+                <label>
+                  Senha
+                  <input
+                    type="password"
+                    value={authForm.password}
+                    onChange={(event) => setAuthForm((prev) => ({ ...prev, password: event.target.value }))}
+                    placeholder="Minimo 6 caracteres"
+                  />
+                </label>
+                <button
+                  onClick={signUpWithPassword}
+                  disabled={loading || !emailValid || !authForm.password || !authForm.name}
+                >
+                  {loading ? 'Criando...' : 'Criar conta'}
+                </button>
+                <button
+                  className="secondary"
+                  onClick={() => {
+                    setAuthView('login');
+                    setNotice('');
+                    setMagicSent(false);
+                    setMagicSentAt(0);
+                  }}
+                  disabled={loading}
+                >
+                  Voltar para entrar
+                </button>
+              </div>
+            </>
+          )}
+
+          {notice && (
+            <p>
+              <small>{notice}</small>
+            </p>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  if (resetMode) {
+    return (
+      <div className="app">
+        <div className="header">
+          <h1>Gestor de Pelada</h1>
+        </div>
+        <div className="card">
+          <h2>Redefinir senha</h2>
+          <p>Crie uma nova senha para sua conta.</p>
+          <div className="stack">
+            <label>
+              Nova senha
+              <input
+                type="password"
+                value={resetForm.password}
+                onChange={(event) => setResetForm((prev) => ({ ...prev, password: event.target.value }))}
+                placeholder="Minimo 6 caracteres"
+              />
+            </label>
+            <label>
+              Confirmar senha
+              <input
+                type="password"
+                value={resetForm.confirm}
+                onChange={(event) => setResetForm((prev) => ({ ...prev, confirm: event.target.value }))}
+                placeholder="Repita a senha"
+              />
+            </label>
+            <button onClick={updatePassword} disabled={loading || !resetForm.password}>
+              {loading ? 'Salvando...' : 'Atualizar senha'}
+            </button>
+            <button
+              className="secondary"
+              onClick={() => {
+                setResetMode(false);
+                setResetForm({ password: '', confirm: '' });
+                window.history.replaceState(null, '', window.location.pathname);
+              }}
+              disabled={loading}
+            >
+              Cancelar
             </button>
           </div>
-          {notice && <p><small>{notice}</small></p>}
+          {notice && (
+            <p>
+              <small>{notice}</small>
+            </p>
+          )}
         </div>
       </div>
     );
