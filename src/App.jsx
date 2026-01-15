@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Link, NavLink, Navigate, Route, Routes, useNavigate, useParams } from 'react-router-dom';
 import { supabase } from './lib/supabaseClient';
 
 const statusLabel = {
@@ -6,6 +7,473 @@ const statusLabel = {
   espera: 'Espera',
   fora: 'Fora',
 };
+
+const LAST_PELADA_KEY = 'gestor:lastPeladaId';
+
+const formatDateTime = (value) => {
+  if (!value) return '-';
+  return new Date(value).toLocaleString();
+};
+
+function PeladaIndex({ peladas, selectedPeladaId, loading }) {
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    if (loading) return;
+    if (peladas.length && selectedPeladaId) {
+      navigate(`/app/peladas/${selectedPeladaId}`, { replace: true });
+    }
+  }, [loading, peladas, selectedPeladaId, navigate]);
+
+  if (loading) {
+    return (
+      <div className="card">
+        <p>Carregando peladas...</p>
+      </div>
+    );
+  }
+
+  if (!peladas.length) {
+    return (
+      <div className="card empty-state">
+        <h2>Sem peladas ainda</h2>
+        <p>Crie uma pelada ou entre usando um codigo/ID.</p>
+        <div className="actions">
+          <Link className="button-link" to="/app/criar-pelada">
+            Criar pelada
+          </Link>
+          <Link className="button-link secondary" to="/app/entrar-pelada">
+            Entrar em pelada
+          </Link>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="card">
+      <p>Selecione uma pelada no menu lateral.</p>
+    </div>
+  );
+}
+
+function PeladaDashboard({
+  peladas,
+  selectedPeladaId,
+  eventos,
+  activeEvento,
+  confirmacao,
+  fila,
+  members,
+  isAdmin,
+  loading,
+  onSelectPelada,
+  loadPeladaDashboard,
+  confirmarPresenca,
+  marcarFora,
+  createEventoForm,
+  setCreateEventoForm,
+  createEvento,
+  toggleEventoStatus,
+  forceStatusForm,
+  setForceStatusForm,
+  adminForceStatus,
+  updateMemberTipo,
+}) {
+  const { peladaId } = useParams();
+  const pelada = peladas.find((item) => item.id === peladaId);
+  const canRespond = activeEvento && activeEvento.status === 'aberto';
+  const confirmados = fila.filter((item) => item.status === 'confirmado').length;
+
+  useEffect(() => {
+    if (!peladaId) return;
+    if (peladaId !== selectedPeladaId) {
+      onSelectPelada(peladaId);
+    }
+    loadPeladaDashboard(peladaId);
+  }, [peladaId, selectedPeladaId, onSelectPelada, loadPeladaDashboard]);
+
+  if (!pelada && !loading) {
+    return (
+      <div className="card">
+        <h2>Pelada nao encontrada</h2>
+        <p>Escolha outra pelada no menu lateral.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="stack">
+      <div className="card">
+        <div className="card-header">
+          <h2>Proximo evento</h2>
+          {activeEvento && (
+            <span className={`badge status-badge ${activeEvento.status}`}>
+              {activeEvento.status === 'aberto' ? 'Aberto' : 'Fechado'}
+            </span>
+          )}
+        </div>
+        {activeEvento ? (
+          <div className="grid two">
+            <div>
+              <p>
+                <strong>Data:</strong> {formatDateTime(activeEvento.data_evento)}
+              </p>
+              <p>
+                <strong>Prioridade ate:</strong>{' '}
+                {activeEvento.prioridade_ate
+                  ? formatDateTime(activeEvento.prioridade_ate)
+                  : 'Sem janela'}
+              </p>
+            </div>
+            <div>
+              <p>
+                <strong>Status:</strong> {activeEvento.status}
+              </p>
+            </div>
+          </div>
+        ) : (
+          <p>Nenhum evento cadastrado ainda.</p>
+        )}
+      </div>
+
+      <div className="card">
+        <h2>Minha situacao</h2>
+        <p>
+          <strong>Estado:</strong> {confirmacao ? statusLabel[confirmacao.status] : 'Nao respondeu'}
+        </p>
+        {confirmacao?.status === 'espera' && (
+          <p>
+            <strong>Posicao na fila:</strong> {confirmacao.ordem_fila}
+          </p>
+        )}
+        {!canRespond && activeEvento && (
+          <p>
+            <small>Confirmacoes fechadas para este evento.</small>
+          </p>
+        )}
+        <div className="actions">
+          <button onClick={confirmarPresenca} disabled={loading || !canRespond}>
+            Confirmar presenca
+          </button>
+          <button
+            className="secondary"
+            onClick={marcarFora}
+            disabled={loading || !confirmacao || !canRespond}
+          >
+            Marcar fora
+          </button>
+        </div>
+      </div>
+
+      <div className="card">
+        <h2>Fila e confirmacoes</h2>
+        {activeEvento ? (
+          <div className="grid two">
+            <div>
+              <p>
+                <strong>Confirmados:</strong> {confirmados}
+                {pelada?.max_players ? ` / Maximo: ${pelada.max_players}` : ''}
+              </p>
+              {confirmacao?.status === 'espera' && (
+                <p>
+                  <strong>Voce esta em:</strong> #{confirmacao.ordem_fila}
+                </p>
+              )}
+            </div>
+            <div>
+              {fila.length > 0 && (
+                <details className="details">
+                  <summary>Ver lista completa</summary>
+                  <table className="table">
+                    <thead>
+                      <tr>
+                        <th>Jogador</th>
+                        <th>Status</th>
+                        <th>Fila</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {fila.map((item) => (
+                        <tr key={item.id}>
+                          <td>{item.users?.name || item.users?.email || item.user_id}</td>
+                          <td>
+                            <span className={`status-pill status-${item.status}`}>
+                              {statusLabel[item.status]}
+                            </span>
+                          </td>
+                          <td>{item.ordem_fila || '-'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </details>
+              )}
+            </div>
+          </div>
+        ) : (
+          <p>Nenhum evento aberto ainda.</p>
+        )}
+      </div>
+
+      {pelada && (
+        <div className="card">
+          <h2>Detalhes da pelada</h2>
+          <div className="actions">
+            <div>
+              <small>ID da pelada</small>
+              <div className="code-box">{pelada.id}</div>
+            </div>
+            <button className="secondary" onClick={() => navigator.clipboard.writeText(pelada.id)}>
+              Copiar ID
+            </button>
+          </div>
+        </div>
+      )}
+
+      {isAdmin && pelada && (
+        <div className="card">
+          <h2>Painel admin</h2>
+          <div className="grid two">
+            <div>
+              <h3>Criar evento</h3>
+              <label>
+                Data e hora
+                <input
+                  type="datetime-local"
+                  value={createEventoForm.data_evento}
+                  onChange={(event) =>
+                    setCreateEventoForm((prev) => ({
+                      ...prev,
+                      data_evento: event.target.value,
+                    }))
+                  }
+                />
+              </label>
+              <label>
+                Prioridade ate (opcional)
+                <input
+                  type="datetime-local"
+                  value={createEventoForm.prioridade_ate}
+                  onChange={(event) =>
+                    setCreateEventoForm((prev) => ({
+                      ...prev,
+                      prioridade_ate: event.target.value,
+                    }))
+                  }
+                />
+              </label>
+              <div className="actions" style={{ marginTop: 12 }}>
+                <button onClick={createEvento} disabled={loading || !createEventoForm.data_evento}>
+                  Abrir confirmacoes
+                </button>
+              </div>
+            </div>
+            <div>
+              <h3>Eventos</h3>
+              {(eventos || []).map((evento) => (
+                <div key={evento.id} className="actions" style={{ marginBottom: 8 }}>
+                  <span>{formatDateTime(evento.data_evento)}</span>
+                  <button
+                    className="secondary"
+                    onClick={() =>
+                      toggleEventoStatus(
+                        evento.id,
+                        evento.status === 'aberto' ? 'fechado' : 'aberto'
+                      )
+                    }
+                  >
+                    {evento.status === 'aberto' ? 'Fechar' : 'Abrir'}
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="grid two" style={{ marginTop: 20 }}>
+            <div>
+              <h3>Fila e confirmacoes</h3>
+              {activeEvento ? (
+                <table className="table">
+                  <thead>
+                    <tr>
+                      <th>Jogador</th>
+                      <th>Status</th>
+                      <th>Fila</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {fila.map((item) => (
+                      <tr key={item.id}>
+                        <td>{item.users?.name || item.users?.email || item.user_id}</td>
+                        <td>
+                          <span className={`status-pill status-${item.status}`}>
+                            {statusLabel[item.status]}
+                          </span>
+                        </td>
+                        <td>{item.ordem_fila || '-'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              ) : (
+                <p>Nenhum evento selecionado.</p>
+              )}
+            </div>
+            <div>
+              <h3>Forcar status</h3>
+              <label>
+                Jogador
+                <select
+                  value={forceStatusForm.user_id}
+                  onChange={(event) =>
+                    setForceStatusForm((prev) => ({
+                      ...prev,
+                      user_id: event.target.value,
+                    }))
+                  }
+                >
+                  <option value="">Selecione</option>
+                  {members.map((member) => (
+                    <option key={member.user_id} value={member.user_id}>
+                      {member.users?.name || member.users?.email || member.user_id}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Status
+                <select
+                  value={forceStatusForm.status}
+                  onChange={(event) =>
+                    setForceStatusForm((prev) => ({
+                      ...prev,
+                      status: event.target.value,
+                    }))
+                  }
+                >
+                  <option value="confirmado">Confirmado</option>
+                  <option value="espera">Espera</option>
+                  <option value="fora">Fora</option>
+                </select>
+              </label>
+              <div className="actions" style={{ marginTop: 12 }}>
+                <button onClick={adminForceStatus} disabled={loading || !activeEvento}>
+                  Aplicar
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div style={{ marginTop: 24 }}>
+            <h3>Participantes</h3>
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Nome</th>
+                  <th>Email</th>
+                  <th>Tipo</th>
+                </tr>
+              </thead>
+              <tbody>
+                {members.map((member) => (
+                  <tr key={member.id}>
+                    <td>{member.users?.name || '-'}</td>
+                    <td>{member.users?.email || '-'}</td>
+                    <td>
+                      <select
+                        value={member.tipo}
+                        onChange={(event) => updateMemberTipo(member.id, event.target.value)}
+                      >
+                        <option value="mensalista">Mensalista</option>
+                        <option value="diarista">Diarista</option>
+                      </select>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CreatePeladaPage({ createPeladaForm, setCreatePeladaForm, loading, onCreatePelada }) {
+  const navigate = useNavigate();
+
+  const handleCreate = async () => {
+    const result = await onCreatePelada();
+    if (result?.id) {
+      navigate(`/app/peladas/${result.id}`);
+    }
+  };
+
+  return (
+    <div className="card">
+      <h2>Criar pelada</h2>
+      <p>Defina o nome e o numero maximo de jogadores.</p>
+      <div className="stack">
+        <label>
+          Nome
+          <input
+            value={createPeladaForm.name}
+            onChange={(event) =>
+              setCreatePeladaForm((prev) => ({ ...prev, name: event.target.value }))
+            }
+            placeholder="Pelada de quinta"
+          />
+        </label>
+        <label>
+          Maximo de jogadores
+          <input
+            type="number"
+            min="1"
+            value={createPeladaForm.max_players}
+            onChange={(event) =>
+              setCreatePeladaForm((prev) => ({ ...prev, max_players: event.target.value }))
+            }
+          />
+        </label>
+        <div className="actions" style={{ marginTop: 12 }}>
+          <button onClick={handleCreate} disabled={loading || !createPeladaForm.name}>
+            {loading ? 'Criando...' : 'Criar pelada'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function JoinPeladaPage({ joinPeladaId, setJoinPeladaId, loading, onJoinPelada }) {
+  const navigate = useNavigate();
+
+  const handleJoin = async () => {
+    const result = await onJoinPelada();
+    if (result?.peladaId) {
+      navigate(`/app/peladas/${result.peladaId}`);
+    }
+  };
+
+  return (
+    <div className="card">
+      <h2>Entrar em pelada</h2>
+      <p>Digite o codigo/ID informado pelo admin.</p>
+      <div className="actions">
+        <input
+          value={joinPeladaId}
+          onChange={(event) => setJoinPeladaId(event.target.value)}
+          placeholder="ID da pelada"
+          style={{ minWidth: 240 }}
+        />
+        <button className="secondary" onClick={handleJoin} disabled={loading || !joinPeladaId}>
+          {loading ? 'Entrando...' : 'Entrar'}
+        </button>
+      </div>
+    </div>
+  );
+}
 
 export default function App() {
   const [session, setSession] = useState(null);
@@ -91,7 +559,7 @@ export default function App() {
 
   useEffect(() => {
     if (!selectedPeladaId) return;
-    loadPeladaDashboard(selectedPeladaId);
+    localStorage.setItem(LAST_PELADA_KEY, selectedPeladaId);
   }, [selectedPeladaId]);
 
   const loadProfile = async () => {
@@ -112,73 +580,86 @@ export default function App() {
     if (error) {
       setNotice(error.message);
     } else {
-      const list = (data || [])
-        .map((row) => row.peladas)
-        .filter(Boolean);
+      const list = (data || []).map((row) => row.peladas).filter(Boolean);
       setPeladas(list);
-      if (list.length && !selectedPeladaId) {
-        setSelectedPeladaId(list[0].id);
+      if (list.length) {
+        const storedId = localStorage.getItem(LAST_PELADA_KEY);
+        const currentMatch = list.find((pelada) => pelada.id === selectedPeladaId);
+        const storedMatch = list.find((pelada) => pelada.id === storedId);
+        const nextId = currentMatch?.id || storedMatch?.id || list[0]?.id || '';
+        if (nextId && nextId !== selectedPeladaId) {
+          setSelectedPeladaId(nextId);
+        }
       }
     }
     setLoading(false);
   };
 
-  const loadPeladaDashboard = async (peladaId) => {
-    setLoading(true);
-    const admin = peladas.find((pelada) => pelada.id === peladaId)?.admin_id === userId;
+  const loadEventoInfo = useCallback(
+    async (eventoId) => {
+      const { data: confirmacaoData } = await supabase
+        .from('confirmacoes')
+        .select('*')
+        .eq('evento_id', eventoId)
+        .eq('user_id', userId)
+        .maybeSingle();
 
-    const { data: eventosData, error: eventosError } = await supabase
-      .from('eventos')
-      .select('*')
-      .eq('pelada_id', peladaId)
-      .order('data_evento', { ascending: true });
+      setConfirmacao(confirmacaoData || null);
 
-    if (eventosError) {
-      setNotice(eventosError.message);
-      setLoading(false);
-      return;
-    }
+      const { data: filaData } = await supabase
+        .from('confirmacoes')
+        .select('id, user_id, status, ordem_fila, users (name, email)')
+        .eq('evento_id', eventoId)
+        .order('status', { ascending: true })
+        .order('ordem_fila', { ascending: true, nullsFirst: true });
+      setFila(filaData || []);
+    },
+    [userId]
+  );
 
-    setEventos(eventosData || []);
+  const loadPeladaDashboard = useCallback(
+    async (peladaId) => {
+      if (!peladaId) return;
+      setLoading(true);
+      const admin = peladas.find((pelada) => pelada.id === peladaId)?.admin_id === userId;
 
-    const eventoAtual = (eventosData || []).find((evento) => evento.status === 'aberto');
-    if (eventoAtual) {
-      await loadEventoInfo(eventoAtual.id, peladaId);
-    } else {
-      setConfirmacao(null);
-      setFila([]);
-    }
-
-    if (admin) {
-      const { data: membersData } = await supabase
-        .from('pelada_users')
-        .select('id, user_id, tipo, ativo, users (id, name, email)')
+      const { data: eventosData, error: eventosError } = await supabase
+        .from('eventos')
+        .select('*')
         .eq('pelada_id', peladaId)
-        .order('created_at', { ascending: true });
-      setMembers(membersData || []);
-    }
+        .order('data_evento', { ascending: true });
 
-    setLoading(false);
-  };
+      if (eventosError) {
+        setNotice(eventosError.message);
+        setLoading(false);
+        return;
+      }
 
-  const loadEventoInfo = async (eventoId, peladaId) => {
-    const { data: confirmacaoData } = await supabase
-      .from('confirmacoes')
-      .select('*')
-      .eq('evento_id', eventoId)
-      .eq('user_id', userId)
-      .maybeSingle();
+      setEventos(eventosData || []);
 
-    setConfirmacao(confirmacaoData || null);
+      const eventoAtual = (eventosData || []).find((evento) => evento.status === 'aberto');
+      if (eventoAtual) {
+        await loadEventoInfo(eventoAtual.id);
+      } else {
+        setConfirmacao(null);
+        setFila([]);
+      }
 
-    const { data: filaData } = await supabase
-      .from('confirmacoes')
-      .select('id, user_id, status, ordem_fila, users (name, email)')
-      .eq('evento_id', eventoId)
-      .order('status', { ascending: true })
-      .order('ordem_fila', { ascending: true, nullsFirst: true });
-    setFila(filaData || []);
-  };
+      if (admin) {
+        const { data: membersData } = await supabase
+          .from('pelada_users')
+          .select('id, user_id, tipo, ativo, users (id, name, email)')
+          .eq('pelada_id', peladaId)
+          .order('created_at', { ascending: true });
+        setMembers(membersData || []);
+      } else {
+        setMembers([]);
+      }
+
+      setLoading(false);
+    },
+    [peladas, userId, loadEventoInfo]
+  );
 
   const signInWithMagicLink = async () => {
     setNotice('');
@@ -292,7 +773,7 @@ export default function App() {
     if (error) {
       setNotice(error.message);
       setLoading(false);
-      return;
+      return null;
     }
 
     await supabase.from('pelada_users').insert({
@@ -303,13 +784,15 @@ export default function App() {
     });
 
     setCreatePeladaForm({ name: '', max_players: 16 });
+    setNotice('Pelada criada.');
     await loadPeladas();
     setSelectedPeladaId(data.id);
     setLoading(false);
+    return { id: data.id };
   };
 
   const joinPelada = async () => {
-    if (!joinPeladaId) return;
+    if (!joinPeladaId) return null;
     setNotice('');
     setLoading(true);
     const { error } = await supabase.from('pelada_users').insert({
@@ -320,12 +803,24 @@ export default function App() {
     });
 
     if (error) {
-      setNotice(error.message);
-    } else {
-      setJoinPeladaId('');
-      await loadPeladas();
+      const message = error.message.toLowerCase();
+      if (message.includes('duplicate') || message.includes('unique')) {
+        setNotice('Voce ja participa dessa pelada.');
+      } else if (message.includes('foreign key') || message.includes('pelada')) {
+        setNotice('Pelada nao encontrada.');
+      } else {
+        setNotice(error.message);
+      }
+      setLoading(false);
+      return null;
     }
+
+    setJoinPeladaId('');
+    setNotice('Entrou com sucesso.');
+    await loadPeladas();
+    setSelectedPeladaId(joinPeladaId);
     setLoading(false);
+    return { peladaId: joinPeladaId };
   };
 
   const createEvento = async () => {
@@ -390,10 +885,7 @@ export default function App() {
 
   const updateMemberTipo = async (memberId, tipo) => {
     setNotice('');
-    const { error } = await supabase
-      .from('pelada_users')
-      .update({ tipo })
-      .eq('id', memberId);
+    const { error } = await supabase.from('pelada_users').update({ tipo }).eq('id', memberId);
     if (error) {
       setNotice(error.message);
     } else {
@@ -422,7 +914,7 @@ export default function App() {
       loginMode === 'magic'
         ? loading
           ? 'Enviando...'
-        : 'Enviar link'
+          : 'Enviar link'
         : loading
         ? 'Entrando...'
         : 'Entrar';
@@ -478,7 +970,9 @@ export default function App() {
                   <input
                     type="email"
                     value={authForm.email}
-                    onChange={(event) => setAuthForm((prev) => ({ ...prev, email: event.target.value }))}
+                    onChange={(event) =>
+                      setAuthForm((prev) => ({ ...prev, email: event.target.value }))
+                    }
                     placeholder="voce@email.com"
                   />
                 </label>
@@ -508,7 +1002,9 @@ export default function App() {
                     <input
                       type="password"
                       value={authForm.password}
-                      onChange={(event) => setAuthForm((prev) => ({ ...prev, password: event.target.value }))}
+                      onChange={(event) =>
+                        setAuthForm((prev) => ({ ...prev, password: event.target.value }))
+                      }
                       placeholder="Minimo 6 caracteres"
                     />
                   </label>
@@ -520,11 +1016,7 @@ export default function App() {
                 </small>
                 <button
                   onClick={loginMode === 'magic' ? signInWithMagicLink : signInWithPassword}
-                  disabled={
-                    loading ||
-                    !emailValid ||
-                    (loginMode === 'password' && !authForm.password)
-                  }
+                  disabled={loading || !emailValid || (loginMode === 'password' && !authForm.password)}
                 >
                   {primaryLoginLabel}
                 </button>
@@ -567,7 +1059,9 @@ export default function App() {
                   Nome
                   <input
                     value={authForm.name}
-                    onChange={(event) => setAuthForm((prev) => ({ ...prev, name: event.target.value }))}
+                    onChange={(event) =>
+                      setAuthForm((prev) => ({ ...prev, name: event.target.value }))
+                    }
                     placeholder="Seu nome"
                   />
                 </label>
@@ -576,7 +1070,9 @@ export default function App() {
                   <input
                     type="email"
                     value={authForm.email}
-                    onChange={(event) => setAuthForm((prev) => ({ ...prev, email: event.target.value }))}
+                    onChange={(event) =>
+                      setAuthForm((prev) => ({ ...prev, email: event.target.value }))
+                    }
                     placeholder="voce@email.com"
                   />
                 </label>
@@ -585,7 +1081,9 @@ export default function App() {
                   <input
                     type="password"
                     value={authForm.password}
-                    onChange={(event) => setAuthForm((prev) => ({ ...prev, password: event.target.value }))}
+                    onChange={(event) =>
+                      setAuthForm((prev) => ({ ...prev, password: event.target.value }))
+                    }
                     placeholder="Minimo 6 caracteres"
                   />
                 </label>
@@ -636,7 +1134,9 @@ export default function App() {
               <input
                 type="password"
                 value={resetForm.password}
-                onChange={(event) => setResetForm((prev) => ({ ...prev, password: event.target.value }))}
+                onChange={(event) =>
+                  setResetForm((prev) => ({ ...prev, password: event.target.value }))
+                }
                 placeholder="Minimo 6 caracteres"
               />
             </label>
@@ -645,7 +1145,9 @@ export default function App() {
               <input
                 type="password"
                 value={resetForm.confirm}
-                onChange={(event) => setResetForm((prev) => ({ ...prev, confirm: event.target.value }))}
+                onChange={(event) =>
+                  setResetForm((prev) => ({ ...prev, confirm: event.target.value }))
+                }
                 placeholder="Repita a senha"
               />
             </label>
@@ -675,286 +1177,126 @@ export default function App() {
   }
 
   return (
-    <div className="app">
-      <div className="header">
-        <div>
-          <h1>Gestor de Pelada</h1>
-          <div className="badge">{profile?.name || session.user.email}</div>
-        </div>
-        <button className="ghost" onClick={signOut}>Sair</button>
-      </div>
-
-      {notice && (
-        <div className="card">
-          <small>{notice}</small>
-        </div>
-      )}
-
-      <div className="grid two">
-        <div className="card">
-          <h2>Suas peladas</h2>
-          {peladas.length === 0 && <p>Nenhuma pelada ainda.</p>}
-          {peladas.length > 0 && (
-            <label>
-              Selecionar pelada
-              <select
-                value={selectedPeladaId}
-                onChange={(event) => setSelectedPeladaId(event.target.value)}
-              >
+    <div className="app-shell">
+      <aside className="sidebar">
+        <div className="sidebar-brand">Gestor</div>
+        <nav className="sidebar-nav">
+          <div className="sidebar-section">
+            <div className="sidebar-title">Peladas</div>
+            {peladas.length === 0 ? (
+              <p className="sidebar-empty">Nenhuma pelada.</p>
+            ) : (
+              <div className="sidebar-list">
                 {peladas.map((pelada) => (
-                  <option key={pelada.id} value={pelada.id}>
+                  <NavLink
+                    key={pelada.id}
+                    to={`/app/peladas/${pelada.id}`}
+                    className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}
+                  >
                     {pelada.name}
-                  </option>
+                  </NavLink>
                 ))}
-              </select>
-            </label>
-          )}
-        </div>
-
-        <div className="card">
-          <h2>Criar pelada</h2>
-          <label>
-            Nome
-            <input
-              value={createPeladaForm.name}
-              onChange={(event) => setCreatePeladaForm((prev) => ({ ...prev, name: event.target.value }))}
-              placeholder="Pelada de quinta"
-            />
-          </label>
-          <label>
-            Maximo de jogadores
-            <input
-              type="number"
-              min="1"
-              value={createPeladaForm.max_players}
-              onChange={(event) => setCreatePeladaForm((prev) => ({ ...prev, max_players: event.target.value }))}
-            />
-          </label>
-          <div className="actions" style={{ marginTop: 12 }}>
-            <button onClick={createPelada} disabled={loading || !createPeladaForm.name}>
-              Criar
-            </button>
+              </div>
+            )}
           </div>
-        </div>
-      </div>
+          <div className="sidebar-section">
+            <NavLink
+              to="/app/criar-pelada"
+              className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}
+            >
+              Criar pelada
+            </NavLink>
+            <NavLink
+              to="/app/entrar-pelada"
+              className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}
+            >
+              Entrar em pelada
+            </NavLink>
+          </div>
+        </nav>
+      </aside>
 
-      <div className="card">
-        <h2>Entrar em uma pelada</h2>
-        <p>Use o ID da pelada informado pelo admin.</p>
-        <div className="actions">
-          <input
-            value={joinPeladaId}
-            onChange={(event) => setJoinPeladaId(event.target.value)}
-            placeholder="ID da pelada"
-            style={{ minWidth: 220 }}
-          />
-          <button className="secondary" onClick={joinPelada} disabled={loading || !joinPeladaId}>
-            Entrar
+      <main className="main">
+        <div className="topbar">
+          <div>
+            <h1>Gestor de Pelada</h1>
+            <div className="badge">{profile?.name || session.user.email}</div>
+          </div>
+          <button className="ghost" onClick={signOut}>
+            Sair
           </button>
         </div>
-      </div>
 
-      {selectedPelada && (
-        <div className="card">
-          <h2>Evento atual</h2>
-          <p><small>ID da pelada: {selectedPelada.id}</small></p>
-          {activeEvento ? (
-            <div className="grid">
-              <div>
-                <p><strong>Data:</strong> {new Date(activeEvento.data_evento).toLocaleString()}</p>
-                <p><strong>Status:</strong> {activeEvento.status}</p>
-                <p><strong>Prioridade ate:</strong> {activeEvento.prioridade_ate ? new Date(activeEvento.prioridade_ate).toLocaleString() : 'Sem janela'}</p>
-              </div>
-              <div>
-                <p><strong>Sua situacao:</strong> {confirmacao ? statusLabel[confirmacao.status] : 'Nao confirmado'}</p>
-                {confirmacao?.status === 'espera' && (
-                  <p><strong>Posicao na fila:</strong> {confirmacao.ordem_fila}</p>
-                )}
-              </div>
-              <div className="actions">
-                <button onClick={confirmarPresenca} disabled={loading || activeEvento.status !== 'aberto'}>
-                  Confirmar presenca
-                </button>
-                <button className="secondary" onClick={marcarFora} disabled={loading || !confirmacao}>
-                  Marcar fora
-                </button>
-              </div>
-              <div>
-                <h3>Confirmacoes</h3>
-                {fila.length ? (
-                  <table className="table">
-                    <thead>
-                      <tr>
-                        <th>Jogador</th>
-                        <th>Status</th>
-                        <th>Fila</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {fila.map((item) => (
-                        <tr key={item.id}>
-                          <td>{item.users?.name || item.users?.email || item.user_id}</td>
-                          <td>
-                            <span className={`status-pill status-${item.status}`}>
-                              {statusLabel[item.status]}
-                            </span>
-                          </td>
-                          <td>{item.ordem_fila || '-'}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                ) : (
-                  <p>Nenhuma confirmacao ainda.</p>
-                )}
-              </div>
-            </div>
-          ) : (
-            <p>Nenhum evento aberto ainda.</p>
-          )}
-        </div>
-      )}
-
-      {isAdmin && selectedPelada && (
-        <div className="card">
-          <h2>Painel admin</h2>
-          <div className="grid two">
-            <div>
-              <h3>Criar evento</h3>
-              <label>
-                Data e hora
-                <input
-                  type="datetime-local"
-                  value={createEventoForm.data_evento}
-                  onChange={(event) => setCreateEventoForm((prev) => ({ ...prev, data_evento: event.target.value }))}
-                />
-              </label>
-              <label>
-                Prioridade ate (opcional)
-                <input
-                  type="datetime-local"
-                  value={createEventoForm.prioridade_ate}
-                  onChange={(event) => setCreateEventoForm((prev) => ({ ...prev, prioridade_ate: event.target.value }))}
-                />
-              </label>
-              <div className="actions" style={{ marginTop: 12 }}>
-                <button onClick={createEvento} disabled={loading || !createEventoForm.data_evento}>
-                  Abrir confirmacoes
-                </button>
-              </div>
-            </div>
-            <div>
-              <h3>Eventos</h3>
-              {(eventos || []).map((evento) => (
-                <div key={evento.id} className="actions" style={{ marginBottom: 8 }}>
-                  <span>{new Date(evento.data_evento).toLocaleString()}</span>
-                  <button
-                    className="secondary"
-                    onClick={() => toggleEventoStatus(evento.id, evento.status === 'aberto' ? 'fechado' : 'aberto')}
-                  >
-                    {evento.status === 'aberto' ? 'Fechar' : 'Abrir'}
-                  </button>
-                </div>
-              ))}
-            </div>
+        {notice && (
+          <div className="card">
+            <small>{notice}</small>
           </div>
+        )}
 
-          <div className="grid two" style={{ marginTop: 20 }}>
-            <div>
-              <h3>Fila e confirmacoes</h3>
-              {activeEvento ? (
-                <table className="table">
-                  <thead>
-                    <tr>
-                      <th>Jogador</th>
-                      <th>Status</th>
-                      <th>Fila</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {fila.map((item) => (
-                      <tr key={item.id}>
-                        <td>{item.users?.name || item.users?.email || item.user_id}</td>
-                        <td>
-                          <span className={`status-pill status-${item.status}`}>
-                            {statusLabel[item.status]}
-                          </span>
-                        </td>
-                        <td>{item.ordem_fila || '-'}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              ) : (
-                <p>Nenhum evento selecionado.</p>
-              )}
-            </div>
-            <div>
-              <h3>Forcar status</h3>
-              <label>
-                Jogador
-                <select
-                  value={forceStatusForm.user_id}
-                  onChange={(event) => setForceStatusForm((prev) => ({ ...prev, user_id: event.target.value }))}
-                >
-                  <option value="">Selecione</option>
-                  {members.map((member) => (
-                    <option key={member.user_id} value={member.user_id}>
-                      {member.users?.name || member.users?.email || member.user_id}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                Status
-                <select
-                  value={forceStatusForm.status}
-                  onChange={(event) => setForceStatusForm((prev) => ({ ...prev, status: event.target.value }))}
-                >
-                  <option value="confirmado">Confirmado</option>
-                  <option value="espera">Espera</option>
-                  <option value="fora">Fora</option>
-                </select>
-              </label>
-              <div className="actions" style={{ marginTop: 12 }}>
-                <button onClick={adminForceStatus} disabled={loading || !activeEvento}>
-                  Aplicar
-                </button>
-              </div>
-            </div>
-          </div>
-
-          <div style={{ marginTop: 24 }}>
-            <h3>Participantes</h3>
-            <table className="table">
-              <thead>
-                <tr>
-                  <th>Nome</th>
-                  <th>Email</th>
-                  <th>Tipo</th>
-                </tr>
-              </thead>
-              <tbody>
-                {members.map((member) => (
-                  <tr key={member.id}>
-                    <td>{member.users?.name || '-'}</td>
-                    <td>{member.users?.email || '-'}</td>
-                    <td>
-                      <select
-                        value={member.tipo}
-                        onChange={(event) => updateMemberTipo(member.id, event.target.value)}
-                      >
-                        <option value="mensalista">Mensalista</option>
-                        <option value="diarista">Diarista</option>
-                      </select>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
+        <Routes>
+          <Route
+            path="/app"
+            element={
+              <PeladaIndex
+                peladas={peladas}
+                selectedPeladaId={selectedPeladaId}
+                loading={loading}
+              />
+            }
+          />
+          <Route
+            path="/app/peladas/:peladaId"
+            element={
+              <PeladaDashboard
+                peladas={peladas}
+                selectedPeladaId={selectedPeladaId}
+                eventos={eventos}
+                activeEvento={activeEvento}
+                confirmacao={confirmacao}
+                fila={fila}
+                members={members}
+                isAdmin={isAdmin}
+                loading={loading}
+                onSelectPelada={setSelectedPeladaId}
+                loadPeladaDashboard={loadPeladaDashboard}
+                confirmarPresenca={confirmarPresenca}
+                marcarFora={marcarFora}
+                createEventoForm={createEventoForm}
+                setCreateEventoForm={setCreateEventoForm}
+                createEvento={createEvento}
+                toggleEventoStatus={toggleEventoStatus}
+                forceStatusForm={forceStatusForm}
+                setForceStatusForm={setForceStatusForm}
+                adminForceStatus={adminForceStatus}
+                updateMemberTipo={updateMemberTipo}
+              />
+            }
+          />
+          <Route
+            path="/app/criar-pelada"
+            element={
+              <CreatePeladaPage
+                createPeladaForm={createPeladaForm}
+                setCreatePeladaForm={setCreatePeladaForm}
+                loading={loading}
+                onCreatePelada={createPelada}
+              />
+            }
+          />
+          <Route
+            path="/app/entrar-pelada"
+            element={
+              <JoinPeladaPage
+                joinPeladaId={joinPeladaId}
+                setJoinPeladaId={setJoinPeladaId}
+                loading={loading}
+                onJoinPelada={joinPelada}
+              />
+            }
+          />
+          <Route path="*" element={<Navigate to="/app" replace />} />
+        </Routes>
+      </main>
     </div>
   );
 }
